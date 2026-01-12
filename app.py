@@ -417,12 +417,12 @@ if prompt := st.chat_input("請輸入您的問題..."):
                 )
 
             except Exception as e:
-                error_str = str(e)
-                # 檢查是否為 429 錯誤（API 額度上限）
-                if "429" in error_str or "quota" in error_str.lower() or "rate limit" in error_str.lower():
-                    st.error("⚠️ API 額度已達上限，請等待一分鐘後再試")
-                    st.info("💡 提示：Gemini API 有使用頻率限制，請稍候再試。")
-                else:
-                    error_msg = f"❌ 發生錯誤：{error_str}"
-                    st.error(error_msg)
-                    st.info("💡 提示：請確認 API 金鑰是否正確，以及網路連線是否正常。")
+            error_str = str(e)
+            # 判斷是否為額度限制錯誤
+            if "429" in error_str or "quota" in error_str.lower():
+                st.error("⚠️ API 額度已達上限")
+                # 這一行是新增的：把真實的錯誤原因印出來，讓你確認是 Minute (分) 還是 Day (天)
+                st.warning(f"🔍 Google 原始回覆：{error_str}")
+                st.info("💡 建議：通常是「每分鐘」限制，請靜置 60 秒後再試。")
+            else:
+                st.error(f"❌ 發生錯誤：{error_str}")
