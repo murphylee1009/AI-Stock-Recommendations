@@ -320,7 +320,7 @@ if prompt := st.chat_input("請輸入您的問題..."):
                 
                 # 建立模型實例
                 model = genai.GenerativeModel(
-                    model_name="gemini-1.5-flash",
+                    model_name="gemini-2.0-flash-exp",
                     tools=[{"google_search_retrieval": {}}],   # 正確的 Google Search 工具設定
                     generation_config={
                         "temperature": 0.7,
