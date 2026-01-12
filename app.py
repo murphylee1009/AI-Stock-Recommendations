@@ -416,13 +416,15 @@ if prompt := st.chat_input("請輸入您的問題..."):
                     height=620
                 )
 
-            except Exception as e:
+        except Exception as e:
+            # 注意：這裡前面要有空格 (Cursor 會自動幫你對齊)
             error_str = str(e)
-            # 判斷是否為額度限制錯誤
-            if "429" in error_str or "quota" in error_str.lower():
+            
+            # 這是新的除錯代碼
+            if "429" in error_str or "quota" in error_str.lower() or "rate limit" in error_str.lower():
                 st.error("⚠️ API 額度已達上限")
-                # 這一行是新增的：把真實的錯誤原因印出來，讓你確認是 Minute (分) 還是 Day (天)
                 st.warning(f"🔍 Google 原始回覆：{error_str}")
-                st.info("💡 建議：通常是「每分鐘」限制，請靜置 60 秒後再試。")
+                st.info("💡 提示：請查看上方黃色文字。若包含 'per_minute' 代表等 1 分鐘；若包含 'per_day' 代表要等明天。")
             else:
                 st.error(f"❌ 發生錯誤：{error_str}")
+                st.info("💡 提示：請確認 API 金鑰是否正確，以及網路連線是否正常。")
