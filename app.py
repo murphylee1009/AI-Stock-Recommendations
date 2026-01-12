@@ -3,6 +3,7 @@ import google.generativeai as genai
 from datetime import datetime
 import re
 import pytz
+import json
 
 # 設定頁面配置
 st.set_page_config(
@@ -72,9 +73,16 @@ def get_system_prompt(time_info):
 - 是否為交易時間：{'是' if time_info['is_trading_hours'] else '否'}
 
 任務：
-1. 根據當前時間判斷，如果是「盤中」則進行「盤中即時分析」，如果是「盤後」則進行「盤後籌碼分析」。
-2. 若使用者未指定股票，請先使用 Google Search 搜尋「今日成交量排行」或「熱門股」再推薦。
-3. 分析架構必須包含：
+1. **重要：在回答的最開頭，必須先以 JSON 格式輸出股票數據**：
+   - 如果分析的是特定股票，輸出格式：{{"price": "最新股價", "change": "漲跌幅（例如：+2.5% 或 -1.2%）", "code": "股票代號（4位數）"}}
+   - 如果分析的是大盤或無特定股票，輸出格式：{{"price": "", "change": "", "code": ""}}
+   - JSON 必須是有效的 JSON 格式，且必須在回答的第一行或前幾行
+   - JSON 必須單獨一行，不要與其他文字混在一起
+   - 範例：{{"price": "580.00", "change": "+2.5%", "code": "2330"}}
+   - 請務必使用 Google Search 搜尋最新股價和漲跌幅數據
+2. 根據當前時間判斷，如果是「盤中」則進行「盤中即時分析」，如果是「盤後」則進行「盤後籌碼分析」。
+3. 若使用者未指定股票，請先使用 Google Search 搜尋「今日成交量排行」或「熱門股」再推薦。
+4. 分析架構必須包含：
    - 基本面：財報數據、營收、獲利能力
    - 消息面：最新新聞、重大事件
    - 技術面：10種技術指標分析
@@ -88,7 +96,7 @@ def get_system_prompt(time_info):
      * OBV (能量潮指標)
      * 乖離率
      * 支撐壓力位
-4. 輸出格式：使用 Markdown，必須包含以下區塊：
+5. 輸出格式：使用 Markdown，必須包含以下區塊：
    - **推薦原因**：簡潔說明為什麼推薦或分析這檔股票
    - **操作建議**：
      * 短線（1-5天）
@@ -99,8 +107,8 @@ def get_system_prompt(time_info):
      * 停利價位
      * 支撐位
      * 壓力位
-5. 嚴格遵守：一定要使用 Google Search 聯網搜尋最新數據，不能憑空臆測。所有股價、成交量、技術指標數據都必須是即時或最新的。
-6. 回答要專業、有條理，使用繁體中文。
+6. 嚴格遵守：一定要使用 Google Search 聯網搜尋最新數據，不能憑空臆測。所有股價、成交量、技術指標數據都必須是即時或最新的。
+7. 回答要專業、有條理，使用繁體中文。
 """
 
 # 從訊息中提取股票代號（4位數）
@@ -114,6 +122,50 @@ def extract_stock_code(text):
         # 台股代號通常在 1000-9999 之間
         if 1000 <= code <= 9999:
             return match
+    return None
+
+# 從 AI 回覆中解析 JSON 數據
+def parse_stock_data_from_response(response_text):
+    """從 AI 回覆中解析股票數據 JSON，解析失敗時返回 None"""
+    if not response_text:
+        return None
+    
+    try:
+        # 方法1：嘗試在前幾行找到 JSON（通常 AI 會在開頭輸出）
+        lines = response_text.split('\n')
+        for line in lines[:10]:  # 只檢查前10行
+            line = line.strip()
+            if line.startswith('{') and '"price"' in line and '"change"' in line and '"code"' in line:
+                try:
+                    data = json.loads(line)
+                    if isinstance(data, dict) and "price" in data and "change" in data and "code" in data:
+                        # 如果所有欄位都是空字串，返回 None
+                        if data["price"] == "" and data["change"] == "" and data["code"] == "":
+                            return None
+                        return data
+                except json.JSONDecodeError:
+                    continue
+        
+        # 方法2：使用正則表達式匹配 JSON 格式
+        json_pattern = r'\{[\s\n]*"price"[\s\n]*:[\s\n]*"[^"]*"[\s\n]*,[\s\n]*"change"[\s\n]*:[\s\n]*"[^"]*"[\s\n]*,[\s\n]*"code"[\s\n]*:[\s\n]*"[^"]*"[\s\n]*\}'
+        match = re.search(json_pattern, response_text, re.IGNORECASE | re.MULTILINE | re.DOTALL)
+        
+        if match:
+            json_str = match.group(0)
+            # 清理可能的換行和空格
+            json_str = re.sub(r'\s+', ' ', json_str).strip()
+            # 解析 JSON
+            data = json.loads(json_str)
+            # 驗證數據格式
+            if isinstance(data, dict) and "price" in data and "change" in data and "code" in data:
+                # 如果所有欄位都是空字串，返回 None
+                if data["price"] == "" and data["change"] == "" and data["code"] == "":
+                    return None
+                return data
+    except (json.JSONDecodeError, KeyError, AttributeError, ValueError, TypeError) as e:
+        # 解析失敗時靜默返回 None，不報錯
+        pass
+    
     return None
 
 # 生成 TradingView Widget HTML
@@ -208,6 +260,34 @@ st.info("💡 目前使用 Gemini 2.0 Flash 高速模型進行深度分析")
 # 顯示聊天訊息
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
+        # 如果是 AI 的回覆，先解析並顯示股票數據
+        if message["role"] == "assistant":
+            try:
+                stock_data = parse_stock_data_from_response(message["content"])
+                if stock_data and stock_data.get("code") and stock_data.get("price"):
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("股票代號", stock_data.get("code", "-"))
+                    with col2:
+                        price_value = stock_data.get("price", "-")
+                        st.metric("最新股價", price_value if price_value else "-")
+                    with col3:
+                        change_value = stock_data.get("change", "-")
+                        # 判斷漲跌顏色
+                        if change_value and change_value != "-" and change_value != "":
+                            try:
+                                # 嘗試提取數值用於 delta
+                                delta_match = re.search(r'([+-]?\d+\.?\d*)', change_value)
+                                delta_num = float(delta_match.group(1)) if delta_match else None
+                                st.metric("漲跌幅", change_value, delta=delta_num if delta_num else None)
+                            except (ValueError, AttributeError):
+                                st.metric("漲跌幅", change_value)
+                        else:
+                            st.metric("漲跌幅", "-")
+            except Exception:
+                # 如果解析或顯示過程中出現任何錯誤，靜默跳過，不影響主要內容顯示
+                pass
+        
         st.markdown(message["content"])
         
         # 如果是 AI 的回覆，顯示 TradingView Widget
@@ -278,6 +358,35 @@ if prompt := st.chat_input("請輸入您的問題..."):
                 
                 # 取得回覆內容
                 ai_response = response.text
+                
+                # 解析股票數據（如果解析失敗會返回 None，不會報錯）
+                try:
+                    stock_data = parse_stock_data_from_response(ai_response)
+                    
+                    # 如果有股票數據，顯示 metrics
+                    if stock_data and stock_data.get("code") and stock_data.get("price"):
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("股票代號", stock_data.get("code", "-"))
+                        with col2:
+                            price_value = stock_data.get("price", "-")
+                            st.metric("最新股價", price_value if price_value else "-")
+                        with col3:
+                            change_value = stock_data.get("change", "-")
+                            # 判斷漲跌顏色
+                            if change_value and change_value != "-" and change_value != "":
+                                try:
+                                    # 嘗試提取數值用於 delta
+                                    delta_match = re.search(r'([+-]?\d+\.?\d*)', change_value)
+                                    delta_num = float(delta_match.group(1)) if delta_match else None
+                                    st.metric("漲跌幅", change_value, delta=delta_num if delta_num else None)
+                                except (ValueError, AttributeError):
+                                    st.metric("漲跌幅", change_value)
+                            else:
+                                st.metric("漲跌幅", "-")
+                except Exception:
+                    # 如果解析或顯示過程中出現任何錯誤，靜默跳過，不影響主要內容顯示
+                    pass
                 
                 # 顯示 AI 回覆
                 st.markdown(ai_response)
