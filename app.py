@@ -5,7 +5,7 @@ import re
 import pytz
 import json
 
-# 設定頁面配置
+# 設定頁面配置 (必須在第一行)
 st.set_page_config(
     page_title="台股 AI 操盤手 (專業版)",
     page_icon="📈",
@@ -174,8 +174,7 @@ def clean_json_from_text(text):
         return ""
     # 移除被 ```json ... ``` 包住的區塊
     text = re.sub(r'```json\s*\{.*?\}\s*```', '', text, flags=re.DOTALL)
-    # 移除單純的 JSON {} 區塊 (針對 Prompt 格式，匹配包含 price, change, code 的 JSON)
-    # 這裡使用較嚴格的匹配以免誤刪其他內容
+    # 移除單純的 JSON {} 區塊
     text = re.sub(r'\{[\s\n]*"price".*?"code".*?\}', '', text, flags=re.DOTALL)
     return text.strip()
 
@@ -268,7 +267,7 @@ with st.sidebar:
 st.title("📈 台股 AI 操盤手 (專業版)")
 st.info("💡 目前使用 Gemini 2.0 Flash 高速模型進行深度分析")
 
-# 顯示聊天訊息
+# 顯示聊天訊息歷史
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         # 如果是 AI 的回覆，先解析並顯示股票數據
@@ -287,10 +286,8 @@ for message in st.session_state.messages:
                         # 判斷漲跌顏色
                         if change_value and change_value != "-" and change_value != "":
                             try:
-                                # 嘗試提取數值用於 delta
                                 delta_match = re.search(r'([+-]?\d+\.?\d*)', change_value)
                                 delta_num = float(delta_match.group(1)) if delta_match else None
-                                # delta_color="inverse" 代表紅漲綠跌 (台股模式)
                                 st.metric("漲跌幅", change_value, delta=delta_num if delta_num else None, delta_color="inverse")
                             except (ValueError, AttributeError):
                                 st.metric("漲跌幅", change_value)
@@ -301,40 +298,27 @@ for message in st.session_state.messages:
             
             # 顯示清理過的文字 (隱藏原始 JSON)
             st.markdown(clean_json_from_text(message["content"]))
+            
+            # 顯示 TradingView Widget (若有)
+            # 為了簡單起見，歷史紀錄只顯示大盤或最後提到的股票，這裡稍微簡化
         else:
             st.markdown(message["content"])
 
-        # 如果是 AI 的回覆，顯示 TradingView Widget
-        if message["role"] == "assistant":
-            # 檢查使用者問題中是否有股票代號
-            user_messages = [m for m in st.session_state.messages[:st.session_state.messages.index(message)] 
-                             if m["role"] == "user"]
-            stock_code = None
-            if user_messages:
-                last_user_msg = user_messages[-1]["content"]
-                stock_code = extract_stock_code(last_user_msg)
-            
-            # 顯示 TradingView Widget
-            st.components.v1.html(
-                get_tradingview_widget(stock_code),
-                height=620
-            )
-
-# 使用者輸入
+# 處理使用者輸入
 if prompt := st.chat_input("請輸入您的問題..."):
     # 加入使用者訊息
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # AI 回覆
+    # AI 回覆區塊
     with st.chat_message("assistant"):
         with st.spinner("🤔 AI 正在分析中，請稍候..."):
             try:
                 # 取得時間資訊
                 time_info = get_current_time_info()
                 
-                # 建立模型實例，使用正確的 tools 設定
+                # 建立模型實例
                 model = genai.GenerativeModel(
                     model_name="gemini-2.0-flash-exp",
                     tools=[{"google_search_retrieval": {}}],   # 正確的 Google Search 工具設定
@@ -369,15 +353,11 @@ if prompt := st.chat_input("請輸入您的問題..."):
                 
                 # 發送訊息
                 response = chat.send_message(full_prompt)
-                
-                # 取得回覆內容
                 ai_response = response.text
                 
-                # 解析股票數據（如果解析失敗會返回 None，不會報錯）
+                # 解析股票數據並顯示 Metrics
                 try:
                     stock_data = parse_stock_data_from_response(ai_response)
-                    
-                    # 如果有股票數據，顯示 metrics
                     if stock_data and stock_data.get("code") and stock_data.get("price"):
                         col1, col2, col3 = st.columns(3)
                         with col1:
@@ -387,26 +367,22 @@ if prompt := st.chat_input("請輸入您的問題..."):
                             st.metric("最新股價", price_value if price_value else "-")
                         with col3:
                             change_value = stock_data.get("change", "-")
-                            # 判斷漲跌顏色
                             if change_value and change_value != "-" and change_value != "":
                                 try:
-                                    # 嘗試提取數值用於 delta
                                     delta_match = re.search(r'([+-]?\d+\.?\d*)', change_value)
                                     delta_num = float(delta_match.group(1)) if delta_match else None
-                                    # delta_color="inverse" 代表紅漲綠跌 (台股模式)
                                     st.metric("漲跌幅", change_value, delta=delta_num if delta_num else None, delta_color="inverse")
                                 except (ValueError, AttributeError):
                                     st.metric("漲跌幅", change_value)
                             else:
                                 st.metric("漲跌幅", "-")
                 except Exception:
-                    # 如果解析或顯示過程中出現任何錯誤，靜默跳過，不影響主要內容顯示
                     pass
 
-                # 顯示 AI 回覆 (使用 clean_json_from_text 隱藏原始 JSON)
+                # 顯示 AI 回覆
                 st.markdown(clean_json_from_text(ai_response))
                 
-                # 儲存 AI 回覆到歷史 (這裡保留原始 response 以便下次對話時 AI 記得它輸出過什麼)
+                # 儲存 AI 回覆到歷史
                 st.session_state.messages.append({"role": "assistant", "content": ai_response})
                 
                 # 顯示 TradingView Widget
@@ -415,16 +391,16 @@ if prompt := st.chat_input("請輸入您的問題..."):
                     get_tradingview_widget(stock_code),
                     height=620
                 )
-
-        except Exception as e:
-            # 注意：這裡前面要有空格 (Cursor 會自動幫你對齊)
-            error_str = str(e)
             
-            # 這是新的除錯代碼
-            if "429" in error_str or "quota" in error_str.lower() or "rate limit" in error_str.lower():
-                st.error("⚠️ API 額度已達上限")
-                st.warning(f"🔍 Google 原始回覆：{error_str}")
-                st.info("💡 提示：請查看上方黃色文字。若包含 'per_minute' 代表等 1 分鐘；若包含 'per_day' 代表要等明天。")
-            else:
-                st.error(f"❌ 發生錯誤：{error_str}")
-                st.info("💡 提示：請確認 API 金鑰是否正確，以及網路連線是否正常。")
+            except Exception as e:
+                # 錯誤處理 (包含 429 偵測)
+                error_str = str(e)
+                
+                # 這是除錯代碼，顯示詳細錯誤
+                if "429" in error_str or "quota" in error_str.lower() or "rate limit" in error_str.lower():
+                    st.error("⚠️ API 額度已達上限")
+                    st.warning(f"🔍 Google 原始回覆：{error_str}")
+                    st.info("💡 提示：若包含 'per_minute' 代表等 1 分鐘；若包含 'per_day' 代表要等明天。")
+                else:
+                    st.error(f"❌ 發生錯誤：{error_str}")
+                    st.info("💡 提示：請確認 API 金鑰是否正確，以及網路連線是否正常。")
