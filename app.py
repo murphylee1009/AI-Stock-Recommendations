@@ -27,42 +27,28 @@ def get_current_time_info():
     now = datetime.now(taiwan_tz)
     
     weekday = now.weekday()
+    # 判斷盤中盤後邏輯
+    is_trading_day = weekday < 5
     hour = now.hour
     minute = now.minute
-    
-    is_trading_day = weekday < 5
-    is_trading_hours = False
-    trading_status = ""
-    
+    trading_status = "休市"
     if is_trading_day:
-        if hour < 9:
-            trading_status = "盤前"
-        elif hour == 9 and minute < 0:
-            trading_status = "盤前"
-        elif (hour == 9 and minute >= 0) or (hour >= 10 and hour < 13) or (hour == 13 and minute <= 30):
-            trading_status = "盤中"
-            is_trading_hours = True
-        else:
-            trading_status = "盤後"
-    else:
-        trading_status = "休市"
-        
+        if 9 <= hour < 13: trading_status = "盤中"
+        elif hour == 13 and minute <= 30: trading_status = "盤中"
+        elif hour < 9: trading_status = "盤前"
+        else: trading_status = "盤後"
+
     return {
         "datetime": now.strftime("%Y-%m-%d %H:%M:%S"),
         "weekday": ["週一", "週二", "週三", "週四", "週五", "週六", "週日"][weekday],
-        "trading_status": trading_status,
-        "is_trading_hours": is_trading_hours,
-        "is_trading_day": is_trading_day,
+        "trading_status": trading_status
     }
 
 def extract_stock_code(text):
     if not text: return None
-    pattern = r'\b(\d{4})\b'
-    matches = re.findall(pattern, text)
+    matches = re.findall(r'\b(\d{4})\b', text)
     for match in matches:
-        code = int(match)
-        if 1000 <= code <= 9999:
-            return match
+        if 1000 <= int(match) <= 9999: return match
     return None
 
 def parse_stock_data_from_response(response_text):
@@ -105,22 +91,13 @@ def get_system_prompt(time_info):
     角色：你是一位擁有 20 年經驗的台股操盤手。
     時間：{time_info['datetime']} ({time_info['weekday']}) | 狀態：{time_info['trading_status']}
     
-    【你的核心能力：Google Search】
-    你擁有原生的 Google 搜尋工具。
-    當使用者詢問股價、大盤或分析時，**請務必使用工具進行聯網搜尋**，獲取當下最新的股價與新聞。
+    【核心指令：使用 Google Search】
+    請務必使用你的內建搜尋工具，針對使用者問題進行聯網搜尋最新財經資訊。
     
-    【任務要求】
-    1. **回答格式**：第一行必須是 JSON 數據（如果有股價）。
-       範例：{{"price": "1080.00", "change": "+15.0 (+1.45%)", "code": "2330"}}
-       若無股價則填 "N/A"。
-    2. **分析邏輯**：
-       - 整合搜尋到的【最新新聞】與【財報數據】。
-       - 結合技術面（均線、KD、RSI）給出操作建議。
-    3. **操作建議**：
-       - 明確指出「多/空」方向。
-       - 給出短中長線的關鍵價位。
-    
-    請使用繁體中文回答。
+    【回答格式】
+    1. 第一行請輸出 JSON (若有股價)：{{"price": "123.4", "change": "+1.5", "code": "xxxx"}}
+    2. 若無法取得股價，請填 "N/A"。
+    3. 分析內容請包含搜尋到的最新新聞、技術面與操作建議。
     """
 
 # --- 5. 介面與邏輯 ---
@@ -129,31 +106,21 @@ if "messages" not in st.session_state:
 
 with st.sidebar:
     st.title("📈 台股 AI 操盤手")
-    st.markdown("### 旗艦版")
     st.success("🚀 核心：Gemini 2.5 Flash")
-    st.info("✅ 已啟用 Google 原生搜尋")
-    
-    st.markdown("---")
+    st.info("✅ Google 原生搜尋")
     
     if st.button("📊 今日大盤分析", use_container_width=True):
-        st.session_state.messages.append({
-            "role": "user",
-            "content": "請使用 Google 搜尋今日台股大盤最新走勢，分析技術面與外資動向。"
-        })
+        st.session_state.messages.append({"role": "user", "content": "請搜尋今日台股大盤最新走勢，分析技術面與外資動向。"})
         st.rerun()
 
     if st.button("🔥 今日熱門股推薦", use_container_width=True):
-        st.session_state.messages.append({
-            "role": "user",
-            "content": "請搜尋今日台股成交量大且漲勢強勁的熱門股票，推薦 1-2 檔並分析。"
-        })
+        st.session_state.messages.append({"role": "user", "content": "請搜尋今日台股熱門股票，推薦 1-2 檔並分析。"})
         st.rerun()
     
     st.markdown("---")
-    time_info = get_current_time_info()
-    st.markdown(f"**{time_info['datetime']}**")
+    st.text(get_current_time_info()['datetime'])
 
-st.title("📈 台股 AI 操盤手 (Google原生版)")
+st.title("📈 台股 AI 操盤手 (旗艦版)")
 
 # 顯示歷史
 for message in st.session_state.messages:
@@ -169,44 +136,41 @@ for message in st.session_state.messages:
         else:
             st.markdown(message["content"])
 
-# 輸入框
 if prompt := st.chat_input("請輸入股票代號或問題..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("🚀 Gemini 2.5 正在進行 Google 搜尋分析..."):
+        with st.spinner("🚀 Gemini 2.5 正在進行 Google 搜尋..."):
             try:
-                time_info = get_current_time_info()
-                system_prompt = get_system_prompt(time_info)
-                
-                # --- 關鍵修改：使用原廠 Google Search 工具 ---
-                # tools=[{"google_search": {}}] 是啟動搜尋的關鍵指令
+                # --- 關鍵修正：使用字串語法 ---
                 model = genai.GenerativeModel(
                     model_name="gemini-2.5-flash",
-                    tools=[{"google_search": {}}], 
+                    tools='google_search_retrieval', # ✅ 這是唯一正確的寫法
                     generation_config={
                         "temperature": 0.7,
                         "max_output_tokens": 8192,
                     }
                 )
                 
-                # 處理歷史訊息轉換 (Google Search 工具對歷史訊息格式要求較嚴格)
+                # 處理歷史訊息 (清理 JSON 避免干擾)
                 chat_history = []
                 for msg in st.session_state.messages[:-1]:
                     role = "model" if msg["role"] == "assistant" else "user"
-                    # 清理內容，避免 JSON 干擾
                     clean_content = clean_json_from_text(msg["content"])
                     chat_history.append({"role": role, "parts": [clean_content]})
 
                 chat = model.start_chat(history=chat_history)
                 
                 # 發送訊息
-                response = chat.send_message(f"{system_prompt}\n\n使用者問題：{prompt}")
+                time_info = get_current_time_info()
+                full_prompt = f"{get_system_prompt(time_info)}\n\n使用者問題：{prompt}"
+                
+                response = chat.send_message(full_prompt)
                 ai_response = response.text
                 
-                # 解析與顯示
+                # 顯示結果
                 stock_data = parse_stock_data_from_response(ai_response)
                 if stock_data:
                     c1, c2, c3 = st.columns(3)
@@ -221,10 +185,6 @@ if prompt := st.chat_input("請輸入股票代號或問題..."):
                 st.components.v1.html(get_tradingview_widget(stock_code), height=620)
 
             except Exception as e:
-                error_str = str(e)
-                if "429" in error_str:
-                     st.error("⚠️ Google 搜尋請求過於頻繁 (429)，請稍等 30 秒再試。")
-                elif "not found" in error_str.lower():
-                     st.error(f"❌ 模型設定錯誤：{error_str} (請確認您的帳號是否支援 2.5 搜尋)")
-                else:
-                    st.error(f"❌ 發生錯誤：{error_str}")
+                # 如果 2.5 真的不支援搜尋，這裡會報錯，我們會看得很清楚
+                st.error(f"❌ 發生錯誤：{str(e)}")
+                st.info("若出現 'AttributeError' 或 'tool' 相關錯誤，代表此帳號的 2.5 版本暫不支援 API 連網。")
