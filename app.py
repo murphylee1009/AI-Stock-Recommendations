@@ -1,5 +1,6 @@
 import streamlit as st
 import google.generativeai as genai
+from google.generativeai import protos # 引入底層協議
 from datetime import datetime
 import re
 import pytz
@@ -7,7 +8,7 @@ import json
 
 # --- 1. 頁面設定 ---
 st.set_page_config(
-    page_title="台股 AI 操盤手 (Google原生版)",
+    page_title="台股 AI 操盤手 (旗艦版)",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -27,28 +28,33 @@ def get_current_time_info():
     now = datetime.now(taiwan_tz)
     
     weekday = now.weekday()
-    # 判斷盤中盤後邏輯
-    is_trading_day = weekday < 5
     hour = now.hour
     minute = now.minute
+    
+    is_trading_day = weekday < 5
     trading_status = "休市"
+    
     if is_trading_day:
         if 9 <= hour < 13: trading_status = "盤中"
         elif hour == 13 and minute <= 30: trading_status = "盤中"
         elif hour < 9: trading_status = "盤前"
         else: trading_status = "盤後"
-
+        
     return {
         "datetime": now.strftime("%Y-%m-%d %H:%M:%S"),
         "weekday": ["週一", "週二", "週三", "週四", "週五", "週六", "週日"][weekday],
-        "trading_status": trading_status
+        "trading_status": trading_status,
+        "is_trading_day": is_trading_day,
     }
 
 def extract_stock_code(text):
     if not text: return None
-    matches = re.findall(r'\b(\d{4})\b', text)
+    pattern = r'\b(\d{4})\b'
+    matches = re.findall(pattern, text)
     for match in matches:
-        if 1000 <= int(match) <= 9999: return match
+        code = int(match)
+        if 1000 <= code <= 9999:
+            return match
     return None
 
 def parse_stock_data_from_response(response_text):
@@ -107,7 +113,7 @@ if "messages" not in st.session_state:
 with st.sidebar:
     st.title("📈 台股 AI 操盤手")
     st.success("🚀 核心：Gemini 2.5 Flash")
-    st.info("✅ Google 原生搜尋")
+    st.info("✅ Google 原生搜尋 (Proto版)")
     
     if st.button("📊 今日大盤分析", use_container_width=True):
         st.session_state.messages.append({"role": "user", "content": "請搜尋今日台股大盤最新走勢，分析技術面與外資動向。"})
@@ -122,7 +128,6 @@ with st.sidebar:
 
 st.title("📈 台股 AI 操盤手 (旗艦版)")
 
-# 顯示歷史
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         if message["role"] == "assistant":
@@ -144,22 +149,21 @@ if prompt := st.chat_input("請輸入股票代號或問題..."):
     with st.chat_message("assistant"):
         with st.spinner("🚀 Gemini 2.5 正在進行 Google 搜尋..."):
             try:
-                # --- 關鍵修正：遵照 400 錯誤指示 ---
-                # 錯誤說：Please use google_search tool instead.
-                # 所以我們這裡改用 google_search 的字典寫法
-                
-                tool_config = {"google_search": {}} # 這就是它要的正確名稱
+                # --- 🔥 最終修正：使用底層 Protos 建構工具 ---
+                # 這會繞過所有字典解析錯誤，直接告訴 API 我們要用 GoogleSearch
+                google_search_tool = protos.Tool(
+                    google_search=protos.GoogleSearch()
+                )
                 
                 model = genai.GenerativeModel(
                     model_name="gemini-2.5-flash",
-                    tools=[tool_config], # 放入列表
+                    tools=[google_search_tool],  # 直接傳入物件
                     generation_config={
                         "temperature": 0.7,
                         "max_output_tokens": 8192,
                     }
                 )
                 
-                # 處理歷史訊息 (清理 JSON 避免干擾)
                 chat_history = []
                 for msg in st.session_state.messages[:-1]:
                     role = "model" if msg["role"] == "assistant" else "user"
@@ -168,14 +172,12 @@ if prompt := st.chat_input("請輸入股票代號或問題..."):
 
                 chat = model.start_chat(history=chat_history)
                 
-                # 發送訊息
                 time_info = get_current_time_info()
                 full_prompt = f"{get_system_prompt(time_info)}\n\n使用者問題：{prompt}"
                 
                 response = chat.send_message(full_prompt)
                 ai_response = response.text
                 
-                # 顯示結果
                 stock_data = parse_stock_data_from_response(ai_response)
                 if stock_data:
                     c1, c2, c3 = st.columns(3)
@@ -190,6 +192,4 @@ if prompt := st.chat_input("請輸入股票代號或問題..."):
                 st.components.v1.html(get_tradingview_widget(stock_code), height=620)
 
             except Exception as e:
-                # 這次如果還有錯，我們需要知道是語法錯還是權限錯
                 st.error(f"❌ 發生錯誤：{str(e)}")
-                st.info("系統提示：請確認是否已更新 requirements.txt 為 clean setup。")

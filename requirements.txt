@@ -1,4 +1,4 @@
 streamlit>=1.30.0
 google-generativeai>=0.8.3
 pytz
-# clean setup v3
+# v4 force clean install
