@@ -91,7 +91,7 @@ def get_system_prompt(time_info):
     角色：你是一位擁有 20 年經驗的台股操盤手。
     時間：{time_info['datetime']} ({time_info['weekday']}) | 狀態：{time_info['trading_status']}
     
-    【核心指令：使用 Google Search】
+    【核心指令：Google Search】
     請務必使用你的內建搜尋工具，針對使用者問題進行聯網搜尋最新財經資訊。
     
     【回答格式】
@@ -144,10 +144,15 @@ if prompt := st.chat_input("請輸入股票代號或問題..."):
     with st.chat_message("assistant"):
         with st.spinner("🚀 Gemini 2.5 正在進行 Google 搜尋..."):
             try:
-                # --- 關鍵修正：使用字串語法 ---
+                # --- 關鍵修正：遵照 400 錯誤指示 ---
+                # 錯誤說：Please use google_search tool instead.
+                # 所以我們這裡改用 google_search 的字典寫法
+                
+                tool_config = {"google_search": {}} # 這就是它要的正確名稱
+                
                 model = genai.GenerativeModel(
                     model_name="gemini-2.5-flash",
-                    tools='google_search_retrieval', # ✅ 這是唯一正確的寫法
+                    tools=[tool_config], # 放入列表
                     generation_config={
                         "temperature": 0.7,
                         "max_output_tokens": 8192,
@@ -185,6 +190,6 @@ if prompt := st.chat_input("請輸入股票代號或問題..."):
                 st.components.v1.html(get_tradingview_widget(stock_code), height=620)
 
             except Exception as e:
-                # 如果 2.5 真的不支援搜尋，這裡會報錯，我們會看得很清楚
+                # 這次如果還有錯，我們需要知道是語法錯還是權限錯
                 st.error(f"❌ 發生錯誤：{str(e)}")
-                st.info("若出現 'AttributeError' 或 'tool' 相關錯誤，代表此帳號的 2.5 版本暫不支援 API 連網。")
+                st.info("系統提示：請確認是否已更新 requirements.txt 為 clean setup。")
