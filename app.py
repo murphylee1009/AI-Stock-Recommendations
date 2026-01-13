@@ -1,14 +1,14 @@
 import streamlit as st
 import google.generativeai as genai
-from google.generativeai import protos # 引入底層協議
 from datetime import datetime
 import re
 import pytz
 import json
+from duckduckgo_search import DDGS
 
 # --- 1. 頁面設定 ---
 st.set_page_config(
-    page_title="台股 AI 操盤手 (旗艦版)",
+    page_title="台股 AI 操盤手 (穩定修復版)",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -21,19 +21,44 @@ if "GEMINI_API_KEY" not in st.secrets:
 
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
-# --- 3. 輔助工具函式 ---
+# --- 3. 搜尋函式 (DuckDuckGo) ---
+def search_web(keyword):
+    """使用 DuckDuckGo 搜尋最新財經資訊"""
+    search_content = ""
+    error_msg = ""
+    # 增加關鍵字權重，確保搜尋結果與股市有關
+    query = f"{keyword} 台灣股市 股價 新聞"
+    
+    try:
+        # 嘗試使用 html 模式，通常比較穩定
+        results = DDGS().text(query, region='tw-tw', max_results=5, backend='html')
+        
+        # 如果 html 模式沒抓到，嘗試預設模式
+        if not results:
+            results = DDGS().text(query, region='tw-tw', max_results=5)
+
+        if results:
+            for res in results:
+                search_content += f"- 標題: {res['title']}\n  連結: {res['href']}\n  摘要: {res['body']}\n\n"
+        else:
+            search_content = "無搜尋結果 (可能暫時無法連線，將依賴模型內建知識)"
+            
+    except Exception as e:
+        error_msg = str(e)
+        search_content = f"搜尋發生錯誤: {error_msg}"
+        
+    return search_content, error_msg
+
+# --- 4. 輔助工具 ---
 def get_current_time_info():
-    """取得當前時間資訊"""
     taiwan_tz = pytz.timezone('Asia/Taipei')
     now = datetime.now(taiwan_tz)
-    
     weekday = now.weekday()
     hour = now.hour
     minute = now.minute
     
     is_trading_day = weekday < 5
     trading_status = "休市"
-    
     if is_trading_day:
         if 9 <= hour < 13: trading_status = "盤中"
         elif hour == 13 and minute <= 30: trading_status = "盤中"
@@ -43,18 +68,14 @@ def get_current_time_info():
     return {
         "datetime": now.strftime("%Y-%m-%d %H:%M:%S"),
         "weekday": ["週一", "週二", "週三", "週四", "週五", "週六", "週日"][weekday],
-        "trading_status": trading_status,
-        "is_trading_day": is_trading_day,
+        "trading_status": trading_status
     }
 
 def extract_stock_code(text):
     if not text: return None
-    pattern = r'\b(\d{4})\b'
-    matches = re.findall(pattern, text)
+    matches = re.findall(r'\b(\d{4})\b', text)
     for match in matches:
-        code = int(match)
-        if 1000 <= code <= 9999:
-            return match
+        if 1000 <= int(match) <= 9999: return match
     return None
 
 def parse_stock_data_from_response(response_text):
@@ -91,21 +112,6 @@ def get_tradingview_widget(stock_code=None):
     </div>
     """
 
-# --- 4. 系統提示詞 ---
-def get_system_prompt(time_info):
-    return f"""
-    角色：你是一位擁有 20 年經驗的台股操盤手。
-    時間：{time_info['datetime']} ({time_info['weekday']}) | 狀態：{time_info['trading_status']}
-    
-    【核心指令：Google Search】
-    請務必使用你的內建搜尋工具，針對使用者問題進行聯網搜尋最新財經資訊。
-    
-    【回答格式】
-    1. 第一行請輸出 JSON (若有股價)：{{"price": "123.4", "change": "+1.5", "code": "xxxx"}}
-    2. 若無法取得股價，請填 "N/A"。
-    3. 分析內容請包含搜尋到的最新新聞、技術面與操作建議。
-    """
-
 # --- 5. 介面與邏輯 ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -113,7 +119,7 @@ if "messages" not in st.session_state:
 with st.sidebar:
     st.title("📈 台股 AI 操盤手")
     st.success("🚀 核心：Gemini 2.5 Flash")
-    st.info("✅ Google 原生搜尋 (Proto版)")
+    st.info("✅ 搜尋引擎：DuckDuckGo (穩定版)")
     
     if st.button("📊 今日大盤分析", use_container_width=True):
         st.session_state.messages.append({"role": "user", "content": "請搜尋今日台股大盤最新走勢，分析技術面與外資動向。"})
@@ -126,8 +132,9 @@ with st.sidebar:
     st.markdown("---")
     st.text(get_current_time_info()['datetime'])
 
-st.title("📈 台股 AI 操盤手 (旗艦版)")
+st.title("📈 台股 AI 操盤手 (穩定修復版)")
 
+# 顯示歷史
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         if message["role"] == "assistant":
@@ -147,22 +154,46 @@ if prompt := st.chat_input("請輸入股票代號或問題..."):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("🚀 Gemini 2.5 正在進行 Google 搜尋..."):
+        # 1. 執行搜尋 (這裡絕對不會報錯，因為是純 Python 程式)
+        search_result_text, error_msg = search_web(prompt)
+        
+        # 顯示搜尋狀況 (讓你知道有沒有抓到資料)
+        with st.expander("👀 查看 AI 讀取的搜尋資料", expanded=False):
+            if error_msg:
+                st.error(f"搜尋模組回報錯誤: {error_msg}")
+            elif "無搜尋結果" in search_result_text:
+                st.warning("⚠️ 搜尋回傳空值")
+            else:
+                st.success("✅ 成功抓取網路資料")
+                st.code(search_result_text)
+
+        with st.spinner("🚀 Gemini 2.5 正在分析..."):
             try:
-                # --- 🔥 最終修正：使用底層 Protos 建構工具 ---
-                # 這會繞過所有字典解析錯誤，直接告訴 API 我們要用 GoogleSearch
-                google_search_tool = protos.Tool(
-                    google_search=protos.GoogleSearch()
-                )
-                
+                # --- 關鍵：不使用任何 tools 設定，直接用純文字對話 ---
+                # 這樣就避開了所有 SDK 版本不相容的問題
                 model = genai.GenerativeModel(
-                    model_name="gemini-2.5-flash",
-                    tools=[google_search_tool],  # 直接傳入物件
+                    model_name="gemini-2.5-flash", # 使用你確認可用的版本
                     generation_config={
                         "temperature": 0.7,
                         "max_output_tokens": 8192,
                     }
                 )
+                
+                # 準備 Prompt (將搜尋結果手動餵給 AI)
+                time_info = get_current_time_info()
+                system_prompt = f"""
+                角色：專業台股操盤手。時間：{time_info['datetime']}。
+                
+                【即時市場資訊】
+                以下是剛剛搜尋到的資料，請依據此內容回答，若資料包含股價請優先引用：
+                {search_result_text}
+                
+                【任務】
+                1. 第一行輸出 JSON：{{"price": "數值", "change": "數值", "code": "代號"}}
+                   (若搜尋資料中無股價，請填 "N/A")
+                2. 進行技術面與籌碼面分析。
+                3. 使用者問題：{prompt}
+                """
                 
                 chat_history = []
                 for msg in st.session_state.messages[:-1]:
@@ -171,13 +202,10 @@ if prompt := st.chat_input("請輸入股票代號或問題..."):
                     chat_history.append({"role": role, "parts": [clean_content]})
 
                 chat = model.start_chat(history=chat_history)
-                
-                time_info = get_current_time_info()
-                full_prompt = f"{get_system_prompt(time_info)}\n\n使用者問題：{prompt}"
-                
-                response = chat.send_message(full_prompt)
+                response = chat.send_message(system_prompt)
                 ai_response = response.text
                 
+                # 顯示結果
                 stock_data = parse_stock_data_from_response(ai_response)
                 if stock_data:
                     c1, c2, c3 = st.columns(3)
@@ -189,7 +217,4 @@ if prompt := st.chat_input("請輸入股票代號或問題..."):
                 st.session_state.messages.append({"role": "assistant", "content": ai_response})
                 
                 stock_code = extract_stock_code(prompt)
-                st.components.v1.html(get_tradingview_widget(stock_code), height=620)
-
-            except Exception as e:
-                st.error(f"❌ 發生錯誤：{str(e)}")
+                st.components.v1.html(get_tradingview_widget(stock_code), height
