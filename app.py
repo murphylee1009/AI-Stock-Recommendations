@@ -1,50 +1,150 @@
 import streamlit as st
 import google.generativeai as genai
-import sys
+from datetime import datetime
+import pytz
+import json
+import re
+from duckduckgo_search import DDGS
 
-st.title("系統底層診斷模式")
+# --- 1. 頁面設定 ---
+st.set_page_config(
+    page_title="台股 AI 操盤手 (旗艦版)",
+    page_icon="📈",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# 1. 檢查 Python 與套件版本
-st.subheader("1. 環境版本檢查")
-st.write(f"Python Version: {sys.version}")
-try:
-    import google.generativeai
-    st.write(f"Google GenAI Library Version: **{google.generativeai.__version__}**")
-    
-    # 判斷版本是否過舊
-    ver_parts = google.generativeai.__version__.split('.')
-    if int(ver_parts[0]) == 0 and int(ver_parts[1]) < 7:
-        st.error("❌ 版本過舊！Gemini 1.5 Flash 至少需要 0.7.0 以上。")
-    else:
-        st.success("✅ 版本符合需求。")
-except ImportError:
-    st.error("❌ 找不到 google.generativeai 套件，requirements.txt 安裝失敗。")
-
-# 2. 檢查 API Key 與模型清單
-st.subheader("2. 帳號可用模型清單")
+# --- 2. 初始化 API ---
 if "GEMINI_API_KEY" not in st.secrets:
-    st.error("❌ 未檢測到 API Key")
-else:
-    st.success("✅ API Key 已設定")
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    
+    st.error("⚠️ 請設定 GEMINI_API_KEY 在 .streamlit/secrets.toml")
+    st.stop()
+
+genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+
+# --- 3. 強大的免費搜尋函式 (DuckDuckGo) ---
+def search_web(keyword):
+    """使用 DuckDuckGo 搜尋最新財經資訊"""
     try:
-        st.write("正在向 Google 查詢可用模型...")
-        models = genai.list_models()
-        found_flash = False
-        
-        model_list = []
-        for m in models:
-            model_list.append(f"- {m.name}")
-            if "gemini-1.5-flash" in m.name:
-                found_flash = True
-        
-        st.code("\n".join(model_list))
-        
-        if found_flash:
-            st.success("✅ 檢測到 gemini-1.5-flash 可用！")
-        else:
-            st.error("❌ 你的 API Key 權限中找不到 gemini-1.5-flash。")
-            
+        # 搜尋台灣地區的財經新聞
+        results = DDGS().text(f"{keyword} 台灣股市 股價 新聞", region='tw-tw', max_results=5)
+        search_content = ""
+        if results:
+            for res in results:
+                search_content += f"- 標題: {res['title']}\n  連結: {res['href']}\n  摘要: {res['body']}\n\n"
+        return search_content if search_content else "無搜尋結果"
     except Exception as e:
-        st.error(f"連線查詢失敗: {str(e)}")
+        return f"搜尋發生錯誤: {str(e)}"
+
+# --- 4. 輔助工具 ---
+def get_current_time_info():
+    taiwan_tz = pytz.timezone('Asia/Taipei')
+    now = datetime.now(taiwan_tz)
+    return {
+        "datetime": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "date": now.strftime("%Y-%m-%d"),
+        "weekday": ["週一", "週二", "週三", "週四", "週五", "週六", "週日"][now.weekday()],
+    }
+
+def extract_stock_code(text):
+    if not text: return None
+    matches = re.findall(r'\b(\d{4})\b', text)
+    for match in matches:
+        if 1000 <= int(match) <= 9999: return match
+    return None
+
+def clean_json_from_text(text):
+    if not text: return ""
+    return re.sub(r'\{[\s\n]*"price".*?"code".*?\}', '', text, flags=re.DOTALL).strip()
+
+def get_tradingview_widget(stock_code=None):
+    symbol = f"TWSE:{stock_code}" if stock_code else "TWSE:TAIEX"
+    return f"""
+    <div class="tradingview-widget-container">
+      <div class="tradingview-widget-container__widget"></div>
+      <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>
+      {{
+      "autosize": true, "symbol": "{symbol}", "interval": "D", "timezone": "Asia/Taipei", "theme": "light", "style": "1", "locale": "zh_TW", "hide_top_toolbar": false, "hide_legend": false, "allow_symbol_change": true, "save_image": false, "calendar": false, "support_host": "https://www.tradingview.com"
+    }}
+      </script>
+    </div>
+    """
+
+# --- 5. 介面與邏輯 ---
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+with st.sidebar:
+    st.title("📈 台股 AI 操盤手")
+    st.success("🚀 核心引擎：Gemini 2.5 Flash")
+    
+    if st.button("📊 今日大盤分析", use_container_width=True):
+        st.session_state.messages.append({"role": "user", "content": "請搜尋今日台股大盤走勢，分析技術面、外資動向與操作建議。"})
+        st.rerun()
+    if st.button("🔥 今日熱門股推薦", use_container_width=True):
+        st.session_state.messages.append({"role": "user", "content": "請搜尋今日台股成交量大且強勢的熱門股票，推薦 1-2 檔並分析。"})
+        st.rerun()
+    if st.button("💎 台積電 (2330) 分析", use_container_width=True):
+        st.session_state.messages.append({"role": "user", "content": "請分析台積電 (2330) 的近期表現與投資價值。"})
+        st.rerun()
+
+st.title("📈 台股 AI 操盤手 (旗艦版)")
+
+# 顯示歷史訊息
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        if message["role"] == "assistant":
+            st.markdown(clean_json_from_text(message["content"]))
+        else:
+            st.markdown(message["content"])
+
+# 處理輸入
+if prompt := st.chat_input("請輸入股票代號或問題 (例如：2330 怎麼看?)..."):
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    with st.chat_message("assistant"):
+        with st.spinner("🔍 AI 正在聯網搜尋最新財經資訊..."):
+            try:
+                # 1. 先進行網路搜尋
+                search_results = search_web(prompt)
+                
+                # 2. 準備給 AI 的提示詞
+                time_info = get_current_time_info()
+                system_prompt = f"""
+                你是一位專業的台股操盤手，現在時間是 {time_info['datetime']}。
+                
+                【重要資訊來源】
+                這是剛剛從網路搜尋到的最新財經資訊，請務必參考這些內容來回答：
+                {search_results}
+                
+                【任務要求】
+                1. 請整合搜尋到的資訊與你的專業知識。
+                2. 給出明確的「多空判斷」與「操作建議」。
+                3. 請使用繁體中文，語氣專業果斷。
+                """
+                
+                # 3. 呼叫 Gemini 2.5 Flash (根據你的截圖，你有這個模型！)
+                # 注意：這裡直接使用你在截圖裡看到的名稱
+                model = genai.GenerativeModel("gemini-2.5-flash")
+                
+                chat_history = []
+                for msg in st.session_state.messages[:-1]:
+                    role = "model" if msg["role"] == "assistant" else "user"
+                    chat_history.append({"role": role, "parts": [msg["content"]]})
+                
+                chat = model.start_chat(history=chat_history)
+                response = chat.send_message(f"{system_prompt}\n\n使用者問題：{prompt}")
+                ai_response = response.text
+                
+                # 4. 顯示結果
+                st.markdown(clean_json_from_text(ai_response))
+                st.session_state.messages.append({"role": "assistant", "content": ai_response})
+                
+                # 5. 顯示圖表
+                stock_code = extract_stock_code(prompt)
+                st.components.v1.html(get_tradingview_widget(stock_code), height=600)
+            
+            except Exception as e:
+                st.error(f"❌ 發生錯誤：{str(e)}")
+                st.info("若發生 404，請截圖模型清單給我確認。")
