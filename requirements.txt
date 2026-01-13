@@ -1,4 +1,4 @@
 streamlit>=1.30.0
-google-generativeai>=0.7.0
+google-generativeai>=0.8.3
 pytz
-# clean update for native google search
+# update tool version
