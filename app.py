@@ -26,14 +26,13 @@ def search_web(keyword):
     """使用 DuckDuckGo 搜尋最新財經資訊"""
     search_content = ""
     error_msg = ""
-    # 增加關鍵字權重，確保搜尋結果與股市有關
     query = f"{keyword} 台灣股市 股價 新聞"
     
     try:
-        # 嘗試使用 html 模式，通常比較穩定
+        # 嘗試使用 html 模式
         results = DDGS().text(query, region='tw-tw', max_results=5, backend='html')
         
-        # 如果 html 模式沒抓到，嘗試預設模式
+        # 如果沒抓到，嘗試預設模式
         if not results:
             results = DDGS().text(query, region='tw-tw', max_results=5)
 
@@ -41,7 +40,7 @@ def search_web(keyword):
             for res in results:
                 search_content += f"- 標題: {res['title']}\n  連結: {res['href']}\n  摘要: {res['body']}\n\n"
         else:
-            search_content = "無搜尋結果 (可能暫時無法連線，將依賴模型內建知識)"
+            search_content = "無搜尋結果"
             
     except Exception as e:
         error_msg = str(e)
@@ -132,89 +131,4 @@ with st.sidebar:
     st.markdown("---")
     st.text(get_current_time_info()['datetime'])
 
-st.title("📈 台股 AI 操盤手 (穩定修復版)")
-
-# 顯示歷史
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        if message["role"] == "assistant":
-            stock_data = parse_stock_data_from_response(message["content"])
-            if stock_data:
-                c1, c2, c3 = st.columns(3)
-                c1.metric("代號", stock_data.get("code", "-"))
-                c2.metric("股價", stock_data.get("price", "-"))
-                c3.metric("漲跌", stock_data.get("change", "-"))
-            st.markdown(clean_json_from_text(message["content"]))
-        else:
-            st.markdown(message["content"])
-
-if prompt := st.chat_input("請輸入股票代號或問題..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    with st.chat_message("assistant"):
-        # 1. 執行搜尋 (這裡絕對不會報錯，因為是純 Python 程式)
-        search_result_text, error_msg = search_web(prompt)
-        
-        # 顯示搜尋狀況 (讓你知道有沒有抓到資料)
-        with st.expander("👀 查看 AI 讀取的搜尋資料", expanded=False):
-            if error_msg:
-                st.error(f"搜尋模組回報錯誤: {error_msg}")
-            elif "無搜尋結果" in search_result_text:
-                st.warning("⚠️ 搜尋回傳空值")
-            else:
-                st.success("✅ 成功抓取網路資料")
-                st.code(search_result_text)
-
-        with st.spinner("🚀 Gemini 2.5 正在分析..."):
-            try:
-                # --- 關鍵：不使用任何 tools 設定，直接用純文字對話 ---
-                # 這樣就避開了所有 SDK 版本不相容的問題
-                model = genai.GenerativeModel(
-                    model_name="gemini-2.5-flash", # 使用你確認可用的版本
-                    generation_config={
-                        "temperature": 0.7,
-                        "max_output_tokens": 8192,
-                    }
-                )
-                
-                # 準備 Prompt (將搜尋結果手動餵給 AI)
-                time_info = get_current_time_info()
-                system_prompt = f"""
-                角色：專業台股操盤手。時間：{time_info['datetime']}。
-                
-                【即時市場資訊】
-                以下是剛剛搜尋到的資料，請依據此內容回答，若資料包含股價請優先引用：
-                {search_result_text}
-                
-                【任務】
-                1. 第一行輸出 JSON：{{"price": "數值", "change": "數值", "code": "代號"}}
-                   (若搜尋資料中無股價，請填 "N/A")
-                2. 進行技術面與籌碼面分析。
-                3. 使用者問題：{prompt}
-                """
-                
-                chat_history = []
-                for msg in st.session_state.messages[:-1]:
-                    role = "model" if msg["role"] == "assistant" else "user"
-                    clean_content = clean_json_from_text(msg["content"])
-                    chat_history.append({"role": role, "parts": [clean_content]})
-
-                chat = model.start_chat(history=chat_history)
-                response = chat.send_message(system_prompt)
-                ai_response = response.text
-                
-                # 顯示結果
-                stock_data = parse_stock_data_from_response(ai_response)
-                if stock_data:
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("代號", stock_data.get("code", "-"))
-                    c2.metric("股價", stock_data.get("price", "-"))
-                    c3.metric("漲跌", stock_data.get("change", "-"))
-                
-                st.markdown(clean_json_from_text(ai_response))
-                st.session_state.messages.append({"role": "assistant", "content": ai_response})
-                
-                stock_code = extract_stock_code(prompt)
-                st.components.v1.html(get_tradingview_widget(stock_code), height
+st.title("📈 台股 AI 操盤
